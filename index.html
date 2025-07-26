@@ -1,0 +1,158 @@
+<!DOCTYPE html><html lang="es"><head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reparto Chuli</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.3/dist/leaflet.css" />
+  <style>
+    body {
+      margin: 0;
+      font-family: sans-serif;
+      background-color: #f4f6f9;
+    }#app {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 1rem;
+}
+
+#map {
+  height: 60vh;
+  width: 100%;
+  border-radius: 12px;
+  margin-top: 1rem;
+}
+
+.controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 100%;
+  max-width: 500px;
+}
+
+.controls input,
+.controls button {
+  padding: 1rem;
+  font-size: 1rem;
+  border-radius: 10px;
+  border: none;
+}
+
+.controls button {
+  background-color: #007bff;
+  color: white;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+.controls button:hover {
+  background-color: #0056b3;
+}
+
+.destinos-lista {
+  background: white;
+  border-radius: 8px;
+  padding: 1rem;
+  margin-top: 1rem;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+  width: 100%;
+  max-width: 500px;
+}
+
+  </style>
+</head><body>
+  <div id="app">
+    <h1>Reparto Chuli</h1>
+    <div class="controls">
+      <input type="text" id="direccionInput" placeholder="Agregar destino (ej: Av. Colón 1234, Mar del Plata)" />
+      <button onclick="agregarDestino()">Agregar destino</button>
+      <button onclick="optimizarRuta()">Optimizar ruta</button>
+      <button onclick="limpiarDestinos()">Limpiar destinos</button>
+    </div>
+    <div id="map"></div>
+    <div class="destinos-lista" id="listaDestinos"></div>
+  </div>  <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"></script>  <script>
+    const apiKey = "tu_api_key_aqui"; // Tu clave OpenRouteService
+    let destinos = [];
+    let mapa = L.map('map').setView([-38.0055, -57.5426], 13);
+    let capa = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png');
+    capa.addTo(mapa);
+    let marcadores = [];
+    let rutaLayer;
+
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(pos => {
+        const { latitude, longitude } = pos.coords;
+        mapa.setView([latitude, longitude], 14);
+      });
+    }
+
+    function agregarDestino() {
+      const direccion = document.getElementById('direccionInput').value;
+      if (!direccion) return;
+      fetch(`https://api.openrouteservice.org/geocode/search?api_key=${apiKey}&text=${direccion}`)
+        .then(res => res.json())
+        .then(data => {
+          const coord = data.features[0].geometry.coordinates;
+          const latlng = [coord[1], coord[0]];
+          destinos.push(latlng);
+          mostrarDestinos();
+        });
+    }
+
+    function mostrarDestinos() {
+      if (rutaLayer) mapa.removeLayer(rutaLayer);
+      marcadores.forEach(m => mapa.removeLayer(m));
+      marcadores = [];
+
+      destinos.forEach((coord, i) => {
+        const marcador = L.marker(coord).addTo(mapa).bindPopup(`Destino ${i + 1}`);
+        marcadores.push(marcador);
+      });
+
+      document.getElementById('listaDestinos').innerHTML = destinos.map((d, i) => `<div>📍 ${i + 1}. ${d[0].toFixed(4)}, ${d[1].toFixed(4)}</div>`).join('');
+    }
+
+    function optimizarRuta() {
+      if (destinos.length < 2) return;
+      const coords = destinos.map(d => [d[1], d[0]]);
+      fetch('https://api.openrouteservice.org/optimization', {
+        method: 'POST',
+        headers: {
+          'Authorization': apiKey,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          jobs: coords.map((c, i) => ({ id: i + 1, location: c })),
+          vehicles: [{ id: 1, start: coords[0] }]
+        })
+      })
+        .then(res => res.json())
+        .then(data => {
+          const orden = data.routes[0].steps.map(step => destinos[step.job - 1]);
+          destinos = orden;
+          mostrarDestinos();
+
+          const rutaCoords = orden.map(c => [c[1], c[0]]);
+          fetch('https://api.openrouteservice.org/v2/directions/driving-car/geojson', {
+            method: 'POST',
+            headers: {
+              'Authorization': apiKey,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ coordinates: rutaCoords })
+          })
+            .then(res => res.json())
+            .then(data => {
+              if (rutaLayer) mapa.removeLayer(rutaLayer);
+              rutaLayer = L.geoJSON(data).addTo(mapa);
+              mapa.fitBounds(rutaLayer.getBounds());
+            });
+        });
+    }
+
+    function limpiarDestinos() {
+      destinos = [];
+      mostrarDestinos();
+    }
+  </script></body></html>
