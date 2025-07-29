@@ -1,105 +1,268 @@
-<!DOCTYPE html><html lang="es">
+<!DOCTYPE html>
+<html lang="es">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Reparto Chuli</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.3/dist/leaflet.css" />
-  <style>
-    body { margin: 0; font-family: sans-serif; }
-    #map { height: 70vh; width: 100%; }
-    .controls { padding: 10px; }
-    .controls input, .controls button { padding: 10px; margin: 5px 0; width: 100%; font-size: 16px; }
-    .destinos-lista { padding: 10px; font-size: 14px; }
-  </style>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>App Reparto - Ruta Optimizada</title>
+<link
+  rel="stylesheet"
+  href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+/>
+<style>
+  body, html {
+    margin: 0; padding: 0; height: 100%;
+    font-family: Arial, sans-serif;
+  }
+  #map {
+    height: 60vh;
+  }
+  #controls {
+    padding: 10px;
+  }
+  input[type=text] {
+    width: 70%;
+    padding: 6px;
+    margin: 4px 0;
+  }
+  button {
+    padding: 6px 10px;
+    margin-left: 8px;
+  }
+  #routeOrder {
+    margin-top: 10px;
+  }
+</style>
 </head>
 <body>
+  <h2 style="text-align:center;">App de Reparto - Ruta Optimizada</h2>
   <div id="map"></div>
-  <div class="controls">
-    <input type="text" id="destino" placeholder="Agregar dirección" />
-    <button onclick="agregarDestino()">Agregar destino</button>
-    <button onclick="optimizarRuta()">Optimizar ruta</button>
-    <button onclick="limpiarDestinos()">Limpiar destinos</button>
+  <div id="controls">
+    <div>
+      <input type="text" id="addressInput" placeholder="Agregar destino (dirección)" />
+      <button id="addBtn">Agregar</button>
+      <button id="clearBtn">Limpiar Destinos</button>
+      <button id="routeBtn">Calcular Ruta</button>
+    </div>
+    <div>
+      <small>Destinos agregados (máx 8):</small>
+      <ul id="destList"></ul>
+    </div>
+    <div id="routeOrder"></div>
   </div>
-  <div class="destinos-lista" id="listaDestinos"></div>  <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"></script>  <script>
-    const apiKey = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjAyNjY4YmE3NTkyMzQ5OGJiNGRkYjA2OTI0YTM3MGQ1IiwiaCI6Im11cm11cjY0In0=";
-    let map = L.map('map');
-    let destinos = [];
-    let markers = [];
-    let rutaLayer = null;
-    let ubicacionActual = null;
 
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(pos => {
-        const { latitude, longitude } = pos.coords;
-        ubicacionActual = [latitude, longitude];
-        map.setView(ubicacionActual, 13);
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-          maxZoom: 19
-        }).addTo(map);
-        L.marker(ubicacionActual).addTo(map).bindPopup("Mi ubicación actual").openPopup();
-      }, () => alert("No se pudo obtener la ubicación."));
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+  ></script>
+
+<script>
+const apiKey = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjAyNjY4YmE3NTkyMzQ5OGJiNGRkYjA2OTI0YTM3MGQ1IiwiaCI6Im11cm11cjY0In0=";
+
+let map = L.map("map").fitWorld();
+
+let markers = [];
+let destinations = []; // {address, coords}
+let routeLayer = null;
+let userMarker = null;
+let userCoords = null;
+
+const addressInput = document.getElementById("addressInput");
+const addBtn = document.getElementById("addBtn");
+const clearBtn = document.getElementById("clearBtn");
+const routeBtn = document.getElementById("routeBtn");
+const destList = document.getElementById("destList");
+const routeOrderDiv = document.getElementById("routeOrder");
+
+// Mostrar mapa y geolocalizar usuario
+function onLocationFound(e) {
+  userCoords = [e.latitude, e.longitude];
+  if (userMarker) {
+    userMarker.setLatLng(userCoords);
+  } else {
+    userMarker = L.marker(userCoords, {icon: L.icon({
+      iconUrl: 'https://cdn-icons-png.flaticon.com/512/64/64113.png',
+      iconSize: [30, 30],
+      iconAnchor: [15, 30]
+    })}).addTo(map).bindPopup("Tu ubicación").openPopup();
+  }
+  map.setView(userCoords, 13);
+}
+function onLocationError(e) {
+  alert("Error al obtener ubicación: " + e.message);
+}
+map.on("locationfound", onLocationFound);
+map.on("locationerror", onLocationError);
+map.locate({setView: true, maxZoom: 16});
+
+// Agregar destino
+addBtn.onclick = async () => {
+  if (destinations.length >= 8) {
+    alert("Máximo 8 destinos");
+    return;
+  }
+  let address = addressInput.value.trim();
+  if (!address) {
+    alert("Ingresa una dirección válida");
+    return;
+  }
+  addBtn.disabled = true;
+  try {
+    let coords = await geocode(address);
+    if (!coords) {
+      alert("No se encontró la dirección");
+      addBtn.disabled = false;
+      return;
+    }
+    destinations.push({address, coords});
+    addMarker(coords, address);
+    updateDestList();
+    addressInput.value = "";
+  } catch (e) {
+    alert("Error al geocodificar: " + e);
+  }
+  addBtn.disabled = false;
+};
+
+// Limpiar destinos
+clearBtn.onclick = () => {
+  destinations = [];
+  markers.forEach(m => map.removeLayer(m));
+  markers = [];
+  destList.innerHTML = "";
+  routeOrderDiv.innerHTML = "";
+  if (routeLayer) {
+    map.removeLayer(routeLayer);
+    routeLayer = null;
+  }
+};
+
+// Mostrar lista destinos
+function updateDestList() {
+  destList.innerHTML = "";
+  destinations.forEach((d,i) => {
+    let li = document.createElement("li");
+    li.textContent = d.address;
+    destList.appendChild(li);
+  });
+}
+
+// Añadir marcador en mapa
+function addMarker(coords, address) {
+  let m = L.marker(coords).addTo(map).bindPopup(address);
+  markers.push(m);
+}
+
+// Geocodificación con OpenRouteService
+async function geocode(text) {
+  const url = `https://api.openrouteservice.org/geocode/search?api_key=${apiKey}&text=${encodeURIComponent(text)}&size=1&lang=es`;
+  const resp = await fetch(url);
+  if (!resp.ok) return null;
+  const data = await resp.json();
+  if (data.features && data.features.length > 0) {
+    let c = data.features[0].geometry.coordinates; // [lng, lat]
+    return [c[1], c[0]];
+  }
+  return null;
+}
+
+// Calcular ruta optimizada
+routeBtn.onclick = async () => {
+  if (!userCoords) {
+    alert("No se pudo obtener tu ubicación actual");
+    return;
+  }
+  if (destinations.length === 0) {
+    alert("Agrega al menos un destino");
+    return;
+  }
+  routeBtn.disabled = true;
+
+  try {
+    // Crear array de coordenadas: origen + destinos
+    let coords = [userCoords, ...destinations.map(d => d.coords)];
+    // Llamar al servicio de optimización ORS
+    const body = {
+      jobs: destinations.map((d, i) => ({
+        id: i + 1,
+        location: [d.coords[1], d.coords[0]] // lng, lat
+      })),
+      vehicles: [{
+        id: 1,
+        start: [userCoords[1], userCoords[0]],
+        capacity: [100],
+        time_window: [0, 32400]
+      }]
+    };
+    const url = "https://api.openrouteservice.org/optimization";
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Authorization": apiKey,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(body)
+    });
+    if (!resp.ok) throw new Error("Error en optimización de ruta");
+    const data = await resp.json();
+    // Extraer orden optimizado
+    let steps = data.routes[0].steps; // array con orden de jobs
+
+    // Crear lista ordenada de paradas
+    let ordenParadas = ["Tu ubicación (inicio)"];
+    let coordsOrdenadas = [userCoords];
+    steps.forEach(s => {
+      if (s.type === "job") {
+        const destino = destinations.find((_, idx) => idx === s.job -1);
+        ordenParadas.push(destino.address);
+        coordsOrdenadas.push(destino.coords);
+      }
+    });
+
+    // Mostrar orden
+    routeOrderDiv.innerHTML = "<b>Orden de paradas:</b><br>" + ordenParadas.map((d,i) => (i+1)+". "+d).join("<br>");
+
+    // Mostrar ruta en mapa
+    if (routeLayer) map.removeLayer(routeLayer);
+
+    // Pedir ruta para toda la lista ordenada (dirección a dirección)
+    const routeData = await getRoute(coordsOrdenadas);
+    if (routeData) {
+      routeLayer = L.geoJSON(routeData, {
+        style: {color: "blue", weight: 5}
+      }).addTo(map);
+      map.fitBounds(routeLayer.getBounds(), {padding: [50,50]});
     }
 
-    function agregarDestino() {
-      const direccion = document.getElementById("destino").value;
-      if (!direccion) return;
+  } catch(e) {
+    alert("Error: "+e.message);
+  }
+  routeBtn.disabled = false;
+};
 
-      fetch(`https://api.openrouteservice.org/geocode/search?api_key=${apiKey}&text=${direccion}`)
-        .then(res => res.json())
-        .then(data => {
-          const coords = data.features[0].geometry.coordinates;
-          const latlng = [coords[1], coords[0]];
-          destinos.push({ direccion, coords: latlng });
-          const marker = L.marker(latlng).addTo(map).bindPopup(direccion);
-          markers.push(marker);
-          actualizarLista();
-        })
-        .catch(() => alert("No se pudo geocodificar la dirección."));
-    }
-
-    function actualizarLista() {
-      const lista = document.getElementById("listaDestinos");
-      lista.innerHTML = destinos.map((d, i) => `${i + 1}. ${d.direccion}`).join("<br>");
-    }
-
-    function optimizarRuta() {
-      if (!ubicacionActual || destinos.length === 0) return alert("Agregá al menos un destino.");
-
-      const locations = [ubicacionActual, ...destinos.map(d => d.coords)].map(p => [p[1], p[0]]);
-
-      fetch("https://api.openrouteservice.org/optimization", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": apiKey
-        },
-        body: JSON.stringify({
-          jobs: destinos.map((d, i) => ({
-            id: i + 1,
-            location: [d.coords[1], d.coords[0]]
-          })),
-          vehicles: [{
-            id: 1,
-            profile: "driving-car",
-            start: [ubicacionActual[1], ubicacionActual[0]]
-          }]
-        })
-      })
-      .then(res => res.json())
-      .then(data => {
-        const route = data.routes[0].steps.map(s => destinos[s.job - 1].coords);
-        if (rutaLayer) map.removeLayer(rutaLayer);
-        rutaLayer = L.polyline([ubicacionActual, ...route], { color: 'blue' }).addTo(map);
-      })
-      .catch(() => alert("No se pudo optimizar la ruta."));
-    }
-
-    function limpiarDestinos() {
-      destinos = [];
-      markers.forEach(m => map.removeLayer(m));
-      markers = [];
-      if (rutaLayer) map.removeLayer(rutaLayer);
-      document.getElementById("listaDestinos").innerHTML = "";
-    }
-  </script></body>
+// Obtener ruta entre puntos con Directions API
+async function getRoute(points) {
+  const coordsStr = points.map(c => c[1]+","+c[0]).join("|"); // lng,lat
+  const url = `https://api.openrouteservice.org/v2/directions/driving-car/geojson?api_key=${apiKey}&start=${points[0][1]},${points[0][0]}&end=${points[points.length-1][1]},${points[points.length-1][0]}&coordinates=${coordsStr}`;
+  // El endpoint correcto no usa start/end si usamos coordinates en orden
+  // Se usa POST para múltiples puntos, pero aquí uso GET con coords para simplificar:
+  // Sin embargo, para múltiples puntos lo correcto es POST:
+  try {
+    const urlPost = "https://api.openrouteservice.org/v2/directions/driving-car/geojson";
+    const bodyPost = { coordinates: points.map(c => [c[1], c[0]]) };
+    const resp = await fetch(urlPost, {
+      method: "POST",
+      headers: {
+        "Authorization": apiKey,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(bodyPost)
+    });
+    if (!resp.ok) throw new Error("No se pudo obtener la ruta");
+    const data = await resp.json();
+    return data;
+  } catch {
+    return null;
+  }
+}
+</script>
+</body>
 </html>
