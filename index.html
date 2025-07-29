@@ -63,10 +63,13 @@
     const input = document.getElementById("destino").value;
     if (!input) return;
 
-    fetch(
-      `https://api.openrouteservice.org/geocode/search?api_key=${apiKey}&text=${encodeURIComponent(
-        input
-      )}`
+    fetch('/api/optimize', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify(body)
+});
     )
       .then((res) => res.json())
       .then((data) => {
