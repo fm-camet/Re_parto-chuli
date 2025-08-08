@@ -7,104 +7,78 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
   <style>
-    html, body { margin: 0; padding: 0; height: 100%; font-family: sans-serif; }
-    #map { height: 70%; }
-    #controls { padding: 10px; background: #f0f0f0; }
-    input, button { margin: 5px 0; width: 100%; padding: 8px; }
-    ol { padding-left: 20px; }
+    body, html { margin: 0; padding: 0; height: 100%; }
+    #map { height: 90%; }
+    #controls { padding: 5px; }
+    input, button { margin: 5px; padding: 5px; font-size: 16px; }
   </style>
 </head>
 <body>
-  <div id="map"></div>
   <div id="controls">
-    <input type="text" id="addressInput" placeholder="Agregar dirección" />
-    <button onclick="addDestination()">Agregar destino</button>
-    <button onclick="optimizeRoute()">Optimizar ruta</button>
-    <button onclick="invertRoute()">Invertir orden</button>
-    <ol id="destList"></ol>
-  </div>  <script>
-    const apiKey = 'TU_API_KEY'; // reemplazá con tu API Key
-    let map = L.map('map').setView([-38.0055, -57.5426], 13);
-    let currentPos = null;
+    <input type="text" id="addressInput" placeholder="Agregar dirección..." />
+    <button onclick="addAddress()">Agregar</button>
+  </div>
+  <div id="map"></div>  <script>
+    const apiKey = 'tu_api_key_openrouteservice';
+    let map = L.map('map');
+    let userLocation;
+    let waypoints = [];
     let markers = [];
-    let destCoords = [];
-    let routeLine = null;
-
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: 'Map data &copy; OpenStreetMap contributors'
-    }).addTo(map);
+    let polyline;
 
     navigator.geolocation.getCurrentPosition(pos => {
-      currentPos = [pos.coords.latitude, pos.coords.longitude];
-      L.marker(currentPos).addTo(map).bindPopup("Ubicación actual").openPopup();
-      map.setView(currentPos, 13);
+      userLocation = [pos.coords.latitude, pos.coords.longitude];
+      map.setView(userLocation, 13);
+      L.marker(userLocation).addTo(map).bindPopup('Ubicación actual').openPopup();
+      waypoints.push(userLocation);
     });
 
-    function addDestination() {
-      if (markers.length >= 9) return alert("Máximo 9 destinos");
-      const address = document.getElementById("addressInput").value;
-      if (!address) return;
-      axios.get(`https://api.openrouteservice.org/geocode/search?api_key=${apiKey}&text=${encodeURIComponent(address)}`)
-        .then(resp => {
-          const coord = resp.data.features[0].geometry.coordinates.reverse();
-          destCoords.push(coord);
-          const marker = L.marker(coord).addTo(map).bindPopup(address);
-          markers.push(marker);
-          updateDestList();
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    async function addAddress() {
+      const input = document.getElementById('addressInput');
+      const address = input.value.trim();
+      if (!address || waypoints.length >= 10) return;
+
+      try {
+        const response = await axios.get(`https://api.openrouteservice.org/geocode/search`, {
+          params: { api_key: apiKey, text: address }
         });
+        const coords = response.data.features[0].geometry.coordinates;
+        const latlng = [coords[1], coords[0]];
+
+        const marker = L.marker(latlng).addTo(map).bindPopup(address);
+        markers.push(marker);
+        waypoints.push(latlng);
+
+        if (waypoints.length >= 2) drawRoute();
+        input.value = '';
+      } catch (err) {
+        alert('Dirección no encontrada');
+      }
     }
 
-    function updateDestList() {
-      const list = document.getElementById("destList");
-      list.innerHTML = "";
-      destCoords.forEach((c, i) => {
-        const li = document.createElement("li");
-        li.innerText = `Destino ${i + 1}`;
-        list.appendChild(li);
-      });
-    }
+    async function drawRoute() {
+      if (polyline) map.removeLayer(polyline);
+      const coords = waypoints.map(([lat, lng]) => [lng, lat]);
 
-    function optimizeRoute() {
-      if (!currentPos || destCoords.length === 0) return;
-      const locations = [currentPos, ...destCoords];
-      axios.post('https://api.openrouteservice.org/v2/matrix/driving-car', {
-        locations: locations.map(p => [p[1], p[0]]),
-        metrics: ["distance"],
-        units: "km"
-      }, {
-        headers: {
-          'Authorization': apiKey,
-          'Content-Type': 'application/json'
-        }
-      }).then(resp => {
-        const distances = resp.data.distances[0].slice(1);
-        const sorted = distances.map((d, i) => [d, i])
-                              .sort((a, b) => a[0] - b[0])
-                              .map(d => destCoords[d[1]]);
-        destCoords = sorted;
-        updateDestList();
-        drawRoute();
-      });
-    }
+      const body = {
+        coordinates: coords,
+        format: 'geojson'
+      };
 
-    function invertRoute() {
-      destCoords.reverse();
-      updateDestList();
-      drawRoute();
-    }
+      try {
+        const response = await axios.post(`https://api.openrouteservice.org/v2/directions/driving-car/geojson`, body, {
+          headers: { 'Authorization': apiKey }
+        });
+        const route = response.data;
 
-    function drawRoute() {
-      if (routeLine) map.removeLayer(routeLine);
-      const coords = [currentPos, ...destCoords];
-      axios.post('https://api.openrouteservice.org/v2/directions/driving-car/geojson', {
-        coordinates: coords.map(c => [c[1], c[0]])
-      }, {
-        headers: { 'Authorization': apiKey }
-      }).then(resp => {
-        routeLine = L.geoJSON(resp.data, {
-          style: { color: 'blue', weight: 4 }
-        }).addTo(map);
-      });
+        polyline = L.geoJSON(route).addTo(map);
+      } catch (err) {
+        alert('Error al trazar la ruta');
+      }
     }
   </script></body>
 </html>
