@@ -34,9 +34,9 @@
 <div id="stops"></div>
 
 <script>
-/* --- API key insertada --- */
-const ORS_API_KEY = "5b3ce3597851110001cf6248f41b607b6a4e4c13931b5c7d156ad57d";
-/* ------------------------- */
+/* --- TU API KEY insertada --- */
+const ORS_API_KEY = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjAyNjY4YmE3NTkyMzQ5OGJiNGRkYjA2OTI0YTM3MGQ1IiwiaCI6Im11cm11cjY0In0=";
+/* --------------------------- */
 
 const MAX_STOPS = 9;
 let map = L.map('map').setView([-38.0055,-57.5426], 13);
@@ -173,10 +173,6 @@ document.getElementById('btn-clear').onclick = clearAll;
 document.getElementById('btn-opt').onclick = drawRouteAuto;
 document.getElementById('addr').addEventListener('keypress', e=>{ if(e.key==='Enter') addStopFromAddress(e.target.value.trim()); });
 
-/* aviso si no hay API key (debería estar insertada) */
-if(!ORS_API_KEY || ORS_API_KEY.length < 10){
-  alert('Inserta tu API key de OpenRouteService en ORS_API_KEY dentro del código.');
-}
 </script>
 </body>
 </html>
