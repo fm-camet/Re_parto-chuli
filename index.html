@@ -2,114 +2,95 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Reparto Chuli</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <title>Rutas con ORS y Fallback</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
   <style>
-    body { margin:0; font-family: Arial, sans-serif; }
-    #map { height: 60vh; }
-    #panel { padding: 10px; }
-    button { margin: 2px; padding: 6px 12px; }
-    ul { padding-left: 18px; }
-    li { margin: 4px 0; }
+    #map { height: 500px; }
   </style>
 </head>
 <body>
 
-<div id="map"></div>
-<div id="panel">
-  <input id="addr" type="text" placeholder="Ingresá una dirección" style="width: 60%;">
+<div>
+  <input id="addr" placeholder="Dirección..." />
   <button id="btn-add">Agregar</button>
   <button id="btn-loc">📍 Mi ubicación</button>
-  <button id="btn-invert">Invertir orden</button>
+  <button id="btn-opt">Optimizar ruta</button>
+  <button id="btn-invert">Invertir</button>
   <button id="btn-clear">Limpiar</button>
-  <button id="btn-opt">Optimizar y trazar</button>
-  <ul id="stops"></ul>
-  <div id="info-route" style="margin-top:8px; font-weight:bold;"></div>
 </div>
+<ul id="stops"></ul>
+<div id="map"></div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 <script>
-const ORS_API_KEY = "TU_API_KEY_AQUI"; // <-- poné tu API key
-const MAX_STOPS = 20;
+/* CONFIG */
+const ORS_API_KEY = "TU_API_KEY_AQUI"; // ← Pega tu API aquí
+const MAX_STOPS = 10;
 
-let map = L.map('map').setView([-38.0023, -57.5575], 13);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 19,
-}).addTo(map);
+/* VARIABLES */
+let map = L.map('map').setView([-38.0055, -57.5426], 13);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(map);
 
 let stops = [];
 let markers = [];
 let routeLayer = null;
 let userPos = null;
 
-/* Ícono numerado */
-function makeNumberIcon(num){
-  return L.divIcon({
-    className: 'number-icon',
-    html: `<div style="background:#1976d2;color:white;border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;">${num}</div>`,
-    iconSize: [28,28]
-  });
+/* FUNCIONES DE GEOCODIFICACIÓN */
+async function geocodeORS(address) {
+  try {
+    const url = `https://api.openrouteservice.org/geocode/search?api_key=${ORS_API_KEY}&text=${encodeURIComponent(address + ', Mar del Plata, Argentina')}&boundary.country=AR&size=1`;
+    const r = await fetch(url);
+    const j = await r.json();
+    if (!j.features || j.features.length === 0) return null;
+    const [lon, lat] = j.features[0].geometry.coordinates;
+    const displayName = j.features[0].properties.label || address;
+    return { lat, lon, displayName };
+  } catch {
+    return null;
+  }
 }
 
-/* Haversine para distancia entre coords */
-function haversine(c1, c2){
-  const R = 6371; // km
-  const dLat = (c2[0] - c1[0]) * Math.PI / 180;
-  const dLon = (c2[1] - c1[1]) * Math.PI / 180;
-  const lat1 = c1[0] * Math.PI / 180;
-  const lat2 = c2[0] * Math.PI / 180;
-
-  const a = Math.sin(dLat/2)**2 + Math.sin(dLon/2)**2 * Math.cos(lat1) * Math.cos(lat2);
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+async function geocodeNominatim(address) {
+  try {
+    const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address + ', Mar del Plata, Argentina')}&limit=1&addressdetails=1`;
+    const r = await fetch(url, { headers: { 'User-Agent': 'LeafletApp/1.0' } });
+    const j = await r.json();
+    if (!j || j.length === 0) return null;
+    const lat = parseFloat(j[0].lat);
+    const lon = parseFloat(j[0].lon);
+    const displayName = j[0].display_name || address;
+    return { lat, lon, displayName };
+  } catch {
+    return null;
+  }
 }
 
-/* Refrescar lista de paradas */
-function refreshStopsUI() {
-  const list = document.getElementById('stops');
-  list.innerHTML = '';
-  markers.forEach(m => map.removeLayer(m));
-  markers = [];
-
-  stops.forEach((s, i) => {
-    const li = document.createElement('li');
-    let distTxt = '';
-    if (userPos) {
-      const dist = haversine(userPos, [s.lat, s.lng]).toFixed(2);
-      distTxt = ` — ${dist} km desde inicio`;
-    }
-    li.textContent = `${i + 1}. ${s.address}${distTxt}`;
-    list.appendChild(li);
-
-    const m = L.marker([s.lat, s.lng], { icon: makeNumberIcon(i + 1) })
-      .addTo(map)
-      .bindPopup(`${i + 1}. ${s.address}`);
-    markers.push(m);
-  });
-}
-
-/* Geocodificar y agregar parada */
+/* Geocodifica dirección -> agrega stop (ORS + fallback Nominatim) */
 async function addStopFromAddress(address) {
   if (!address) { alert('Ingresá una dirección'); return; }
   if (stops.length >= MAX_STOPS) { alert('Máximo ' + MAX_STOPS + ' destinos'); return; }
 
   try {
-    const url = `https://api.openrouteservice.org/geocode/search?api_key=${ORS_API_KEY}&text=${encodeURIComponent(address + ', Mar del Plata, Argentina')}&boundary.country=AR&size=1`;
-    const r = await fetch(url);
-    const j = await r.json();
+    let result = await geocodeORS(address);
+    if (!result) {
+      console.warn('ORS no encontró resultado, probando Nominatim...');
+      result = await geocodeNominatim(address);
+    }
 
-    if (!j.features || j.features.length === 0) throw new Error('no encontrado');
-    const [lon, lat] = j.features[0].geometry.coordinates;
+    if (!result) {
+      alert('Dirección no encontrada en ningún servicio.');
+      return;
+    }
 
-    // evitar duplicados
+    const { lat, lon, displayName } = result;
     const exists = stops.some(s => s.lat === lat && s.lng === lon);
     if (exists) {
       alert('Ese destino ya fue agregado.');
       return;
     }
 
-    const displayName = j.features[0].properties.label || address;
-    stops.push({ address: displayName, lat: lat, lng: lon });
+    stops.push({ address: displayName, lat, lng: lon });
     refreshStopsUI();
 
     if (userPos) {
@@ -118,8 +99,23 @@ async function addStopFromAddress(address) {
     }
   } catch (e) {
     console.error(e);
-    alert('Dirección no encontrada.');
+    alert('Error procesando la dirección.');
   }
+}
+
+/* UI de stops */
+function refreshStopsUI() {
+  const list = document.getElementById('stops');
+  list.innerHTML = '';
+  markers.forEach(m => map.removeLayer(m));
+  markers = [];
+  stops.forEach((s, i) => {
+    const li = document.createElement('li');
+    li.textContent = `${i+1}. ${s.address}`;
+    list.appendChild(li);
+    const m = L.marker([s.lat, s.lng]).addTo(map).bindPopup(`${i+1}. ${s.address}`);
+    markers.push(m);
+  });
 }
 
 /* Geolocalización */
@@ -127,7 +123,7 @@ function useMyLocation() {
   if (!navigator.geolocation) { alert('No hay geolocalización'); return; }
   navigator.geolocation.getCurrentPosition(p => {
     userPos = [p.coords.latitude, p.coords.longitude];
-    const m = L.circleMarker(userPos, { radius: 8, color: '#2e7d32', fill: true }).addTo(map).bindPopup('Tu ubicación').openPopup();
+    L.circleMarker(userPos, { radius: 8, color: '#2e7d32', fill: true }).addTo(map).bindPopup('Tu ubicación').openPopup();
     map.setView(userPos, 14);
     refreshStopsUI();
   }, err => {
@@ -135,19 +131,32 @@ function useMyLocation() {
   }, { enableHighAccuracy: true, timeout: 10000 });
 }
 
-/* Ordenar por cercanía */
+/* Ordenar por proximidad */
 function sortStopsByProximity() {
   if (!userPos) { alert('Activa ubicación primero (📍 Mi ubicación)'); return; }
   stops.sort((a, b) => haversine(userPos, [a.lat, a.lng]) - haversine(userPos, [b.lat, b.lng]));
   refreshStopsUI();
 }
 
-/* Dibujar ruta ordenada */
+/* Haversine */
+function haversine(coord1, coord2) {
+  const R = 6371e3;
+  const rad = x => x * Math.PI / 180;
+  const [lat1, lon1] = coord1;
+  const [lat2, lon2] = coord2;
+  const φ1 = rad(lat1), φ2 = rad(lat2);
+  const Δφ = rad(lat2 - lat1);
+  const Δλ = rad(lon2 - lon1);
+  const a = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+/* Traza ruta */
 async function drawRouteOrdered(coordsLatLng) {
   if (coordsLatLng.length < 2) return;
   const coordsLonLat = coordsLatLng.map(c => [c[1], c[0]]);
   const body = { coordinates: coordsLonLat };
-
   try {
     const res = await fetch('https://api.openrouteservice.org/v2/directions/driving-car/geojson', {
       method: 'POST',
@@ -155,24 +164,16 @@ async function drawRouteOrdered(coordsLatLng) {
       body: JSON.stringify(body)
     });
     const geo = await res.json();
-
     if (routeLayer) map.removeLayer(routeLayer);
     routeLayer = L.geoJSON(geo, { style: { color: '#1976d2', weight: 4 } }).addTo(map);
     map.fitBounds(routeLayer.getBounds(), { padding: [40, 40] });
-
-    // mostrar distancia y tiempo total
-    if (geo.features && geo.features[0] && geo.features[0].properties && geo.features[0].properties.summary) {
-      const distKm = (geo.features[0].properties.summary.distance / 1000).toFixed(2);
-      const durMin = Math.round(geo.features[0].properties.summary.duration / 60);
-      document.getElementById('info-route').innerHTML = `Distancia total: ${distKm} km — Tiempo estimado: ${durMin} min`;
-    }
   } catch (e) {
     console.error(e);
     alert('Error trazando ruta.');
   }
 }
 
-/* Dibujar ruta automática */
+/* Flujo automático */
 async function drawRouteAuto() {
   if (!userPos) { console.warn('sin userPos'); return; }
   if (stops.length === 0) return;
@@ -181,14 +182,14 @@ async function drawRouteAuto() {
   await drawRouteOrdered(coords);
 }
 
-/* Invertir orden */
+/* Invertir */
 async function invertOrder() {
   stops.reverse();
   refreshStopsUI();
   if (userPos) await drawRouteOrdered([userPos, ...stops.map(s => [s.lat, s.lng])]);
 }
 
-/* Limpiar todo */
+/* Limpiar */
 function clearAll() {
   stops = [];
   markers.forEach(m => map.removeLayer(m));
@@ -196,7 +197,6 @@ function clearAll() {
   if (routeLayer) map.removeLayer(routeLayer);
   routeLayer = null;
   document.getElementById('stops').innerHTML = '';
-  document.getElementById('info-route').innerHTML = '';
 }
 
 /* Eventos UI */
@@ -205,7 +205,9 @@ document.getElementById('btn-add').onclick = () => addStopFromAddress(document.g
 document.getElementById('btn-invert').onclick = invertOrder;
 document.getElementById('btn-clear').onclick = clearAll;
 document.getElementById('btn-opt').onclick = drawRouteAuto;
-document.getElementById('addr').addEventListener('keypress', e => { if (e.key === 'Enter') addStopFromAddress(e.target.value.trim()); });
+document.getElementById('addr').addEventListener('keypress', e => {
+  if (e.key === 'Enter') addStopFromAddress(e.target.value.trim());
+});
 </script>
 </body>
 </html>
