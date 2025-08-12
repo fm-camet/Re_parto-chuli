@@ -1,171 +1,211 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Geolocalización y Rutas</title>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
-    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-    <style>
-        #map { height: 400px; }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reparto Chuli</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    body { margin:0; font-family: Arial, sans-serif; }
+    #map { height: 60vh; }
+    #panel { padding: 10px; }
+    button { margin: 2px; padding: 6px 12px; }
+    ul { padding-left: 18px; }
+    li { margin: 4px 0; }
+  </style>
 </head>
 <body>
-    <div id="map"></div>
-    <input type="text" id="addr" placeholder="Ingresa una dirección" />
-    <button id="btn-add">Agregar</button>
-    <button id="btn-loc">📍 Mi ubicación</button>
-    <button id="btn-invert">Invertir</button>
-    <button id="btn-clear">Limpiar</button>
-    <button id="btn-opt">Ruta automática</button>
-    <div id="stops"></div>
 
-    <script>
-        const MAX_STOPS = 10;
-        const ORS_API_KEY = '5b3ce3597851110001cf6248b3b9c8e2d1c4e1c1c1c1c1c1c1c1c1c1c1c1c1c1'; // Reemplaza con tu clave de API
-        let stops = [];
-        let markers = [];
-        let routeLayer = null;
-        let userPos = null;
+<div id="map"></div>
+<div id="panel">
+  <input id="addr" type="text" placeholder="Ingresá una dirección" style="width: 60%;">
+  <button id="btn-add">Agregar</button>
+  <button id="btn-loc">📍 Mi ubicación</button>
+  <button id="btn-invert">Invertir orden</button>
+  <button id="btn-clear">Limpiar</button>
+  <button id="btn-opt">Optimizar y trazar</button>
+  <ul id="stops"></ul>
+  <div id="info-route" style="margin-top:8px; font-weight:bold;"></div>
+</div>
 
-        const map = L.map('map').setView([0, 0], 2); // Inicializa el mapa
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            maxZoom: 19,
-        }).addTo(map);
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const ORS_API_KEY = "TU_API_KEY_AQUI"; // <-- poné tu API key
+const MAX_STOPS = 20;
 
-        function refreshStopsUI() {
-            const stopsList = document.getElementById('stops');
-            stopsList.innerHTML = '';
-            stops.forEach((s, i) => {
-                const li = document.createElement('li');
-                li.textContent = `${i + 1}. ${s.address}`;
-                stopsList.appendChild(li);
-                const m = L.marker([s.lat, s.lng], { icon: makeNumberIcon(i + 1) }).addTo(map).bindPopup(`${i + 1}. ${s.address}`);
-                markers.push(m);
-            });
-        }
+let map = L.map('map').setView([-38.0023, -57.5575], 13);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19,
+}).addTo(map);
 
-        /* Geocodifica dirección -> agrega stop */
-        async function addStopFromAddress(address) {
-            if (!address) {
-                alert('Ingresá una dirección');
-                return;
-            }
-            if (stops.length >= MAX_STOPS) {
-                alert('Máximo ' + MAX_STOPS + ' destinos');
-                return;
-            }
+let stops = [];
+let markers = [];
+let routeLayer = null;
+let userPos = null;
 
-            // Verificar si la dirección ya existe
-            if (stops.some(stop => stop.address.toLowerCase() === address.toLowerCase())) {
-                alert('Esta dirección ya ha sido agregada.');
-                return;
-            }
+/* Ícono numerado */
+function makeNumberIcon(num){
+  return L.divIcon({
+    className: 'number-icon',
+    html: `<div style="background:#1976d2;color:white;border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;">${num}</div>`,
+    iconSize: [28,28]
+  });
+}
 
-            try {
-                const url = `https://api.openrouteservice.org/geocode/search?api_key=${ORS_API_KEY}&text=${encodeURIComponent(address)}&size=1`;
-                const r = await fetch(url);
-                const j = await r.json();
+/* Haversine para distancia entre coords */
+function haversine(c1, c2){
+  const R = 6371; // km
+  const dLat = (c2[0] - c1[0]) * Math.PI / 180;
+  const dLon = (c2[1] - c1[1]) * Math.PI / 180;
+  const lat1 = c1[0] * Math.PI / 180;
+  const lat2 = c2[0] * Math.PI / 180;
 
-                if (!j.features || j.features.length === 0) throw new Error('no encontrado');
+  const a = Math.sin(dLat/2)**2 + Math.sin(dLon/2)**2 * Math.cos(lat1) * Math.cos(lat2);
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
 
-                const [lon, lat] = j.features[0].geometry.coordinates;
+/* Refrescar lista de paradas */
+function refreshStopsUI() {
+  const list = document.getElementById('stops');
+  list.innerHTML = '';
+  markers.forEach(m => map.removeLayer(m));
+  markers = [];
 
-                // Verificar si las coordenadas ya están en la lista de paradas
-                if (stops.some(stop => stop.lat === lat && stop.lng === lon)) {
-                    alert('Esta ubicación ya ha sido agregada.');
-                    return;
-                }
+  stops.forEach((s, i) => {
+    const li = document.createElement('li');
+    let distTxt = '';
+    if (userPos) {
+      const dist = haversine(userPos, [s.lat, s.lng]).toFixed(2);
+      distTxt = ` — ${dist} km desde inicio`;
+    }
+    li.textContent = `${i + 1}. ${s.address}${distTxt}`;
+    list.appendChild(li);
 
-                stops.push({ address: address, lat: lat, lng: lon });
-                refreshStopsUI();
+    const m = L.marker([s.lat, s.lng], { icon: makeNumberIcon(i + 1) })
+      .addTo(map)
+      .bindPopup(`${i + 1}. ${s.address}`);
+    markers.push(m);
+  });
+}
 
-                // Si tenemos ubicación del usuario, ordenar automáticamente y trazar
-                if (userPos) {
-                    sortStopsByProximity();
-                    await drawRouteAuto();
-                }
-            } catch (e) {
-                console.error(e);
-                alert('Dirección no encontrada.');
-            }
-        }
+/* Geocodificar y agregar parada */
+async function addStopFromAddress(address) {
+  if (!address) { alert('Ingresá una dirección'); return; }
+  if (stops.length >= MAX_STOPS) { alert('Máximo ' + MAX_STOPS + ' destinos'); return; }
 
-        /* usar geolocalización */
-        function useMyLocation() {
-            if (!navigator.geolocation) { alert('No hay geolocalización'); return; }
-            navigator.geolocation.getCurrentPosition(p => {
-                userPos = [p.coords.latitude, p.coords.longitude];
-                const m = L.circleMarker(userPos, { radius: 8, color: '#2e7d32', fill: true }).addTo(map).bindPopup('Tu ubicación').openPopup();
-                map.setView(userPos, 14);
-                refreshStopsUI();
-            }, err => {
-                alert('Error geolocalización: ' + err.message);
-            }, { enableHighAccuracy: true, timeout: 10000 });
-        }
+  try {
+    const url = `https://api.openrouteservice.org/geocode/search?api_key=${ORS_API_KEY}&text=${encodeURIComponent(address + ', Mar del Plata, Argentina')}&boundary.country=AR&size=1`;
+    const r = await fetch(url);
+    const j = await r.json();
 
-        /* ordenar localmente por cercanía desde userPos */
-        function sortStopsByProximity() {
-            if (!userPos) { alert('Activa ubicación primero (📍 Mi ubicación)'); return; }
-            stops.sort((a, b) => haversine(userPos, [a.lat, a.lng]) - haversine(userPos, [b.lat, b.lng]));
-            refreshStopsUI();
-        }
+    if (!j.features || j.features.length === 0) throw new Error('no encontrado');
+    const [lon, lat] = j.features[0].geometry.coordinates;
 
-        /* traza ruta llamando ORS directions una vez (userPos -> stops...) */
-        async function drawRouteOrdered(coordsLatLng) {
-            if (coordsLatLng.length < 2) return;
-            const coordsLonLat = coordsLatLng.map(c => [c[1], c[0]]); // lon,lat
-            const body = { coordinates: coordsLonLat };
-            try {
-                const res = await fetch('https://api.openrouteservice.org/v2/directions/driving-car/geojson', {
-                    method: 'POST',
-                    headers: { 'Authorization': ORS_API_KEY, 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body)
-                });
-                const geo = await res.json();
-                if (routeLayer) map.removeLayer(routeLayer);
-                routeLayer = L.geoJSON(geo, { style: { color: '#1976d2', weight: 4 } }).addTo(map);
-                map.fitBounds(routeLayer.getBounds(), { padding: [40, 40] });
-            } catch (e) {
-                console.error(e);
-                alert('Error trazando ruta.');
-            }
-        }
+    // evitar duplicados
+    const exists = stops.some(s => s.lat === lat && s.lng === lon);
+    if (exists) {
+      alert('Ese destino ya fue agregado.');
+      return;
+    }
 
-        /* ordena localmente y luego traza (flujo automático) */
-        async function drawRouteAuto() {
-            if (!userPos) { console.warn('sin userPos'); return; }
-            if (stops.length === 0) return;
-            sortStopsByProximity();
-            const coords = [userPos, ...stops.map(s => [s.lat, s.lng])];
-            await drawRouteOrdered(coords);
-        }
+    const displayName = j.features[0].properties.label || address;
+    stops.push({ address: displayName, lat: lat, lng: lon });
+    refreshStopsUI();
 
-        /* invertir manteniendo inicio = userPos */
-        async function invertOrder() {
-            stops.reverse();
-            refreshStopsUI();
-            if (userPos) await drawRouteOrdered([userPos, ...stops.map(s => [s.lat, s.lng])]);
-        }
+    if (userPos) {
+      sortStopsByProximity();
+      await drawRouteAuto();
+    }
+  } catch (e) {
+    console.error(e);
+    alert('Dirección no encontrada.');
+  }
+}
 
-        /* limpiar todo */
-        function clearAll() {
-            stops = [];
-            markers.forEach(m => map.removeLayer(m));
-            markers = [];
-            if (routeLayer) map.removeLayer(routeLayer);
-            routeLayer = null;
-            document.getElementById('stops').innerHTML = '';
-        }
+/* Geolocalización */
+function useMyLocation() {
+  if (!navigator.geolocation) { alert('No hay geolocalización'); return; }
+  navigator.geolocation.getCurrentPosition(p => {
+    userPos = [p.coords.latitude, p.coords.longitude];
+    const m = L.circleMarker(userPos, { radius: 8, color: '#2e7d32', fill: true }).addTo(map).bindPopup('Tu ubicación').openPopup();
+    map.setView(userPos, 14);
+    refreshStopsUI();
+  }, err => {
+    alert('Error geolocalización: ' + err.message);
+  }, { enableHighAccuracy: true, timeout: 10000 });
+}
 
-        /* eventos UI */
-        document.getElementById('btn-loc').onclick = useMyLocation;
-        document.getElementById('btn-add').onclick = () => addStopFromAddress(document.getElementById('addr').value.trim());
-        document.getElementById('btn-invert').onclick = invertOrder;
-        document.getElementById('btn-clear').onclick = clearAll;
-        document.getElementById('btn-opt').onclick = drawRouteAuto;
-        document.getElementById('addr').addEventListener('keypress', e => { if (e.key === 'Enter') addStopFromAddress(e.target.value.trim()); });
+/* Ordenar por cercanía */
+function sortStopsByProximity() {
+  if (!userPos) { alert('Activa ubicación primero (📍 Mi ubicación)'); return; }
+  stops.sort((a, b) => haversine(userPos, [a.lat, a.lng]) - haversine(userPos, [b.lat, b.lng]));
+  refreshStopsUI();
+}
 
-    </script>
+/* Dibujar ruta ordenada */
+async function drawRouteOrdered(coordsLatLng) {
+  if (coordsLatLng.length < 2) return;
+  const coordsLonLat = coordsLatLng.map(c => [c[1], c[0]]);
+  const body = { coordinates: coordsLonLat };
+
+  try {
+    const res = await fetch('https://api.openrouteservice.org/v2/directions/driving-car/geojson', {
+      method: 'POST',
+      headers: { 'Authorization': ORS_API_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const geo = await res.json();
+
+    if (routeLayer) map.removeLayer(routeLayer);
+    routeLayer = L.geoJSON(geo, { style: { color: '#1976d2', weight: 4 } }).addTo(map);
+    map.fitBounds(routeLayer.getBounds(), { padding: [40, 40] });
+
+    // mostrar distancia y tiempo total
+    if (geo.features && geo.features[0] && geo.features[0].properties && geo.features[0].properties.summary) {
+      const distKm = (geo.features[0].properties.summary.distance / 1000).toFixed(2);
+      const durMin = Math.round(geo.features[0].properties.summary.duration / 60);
+      document.getElementById('info-route').innerHTML = `Distancia total: ${distKm} km — Tiempo estimado: ${durMin} min`;
+    }
+  } catch (e) {
+    console.error(e);
+    alert('Error trazando ruta.');
+  }
+}
+
+/* Dibujar ruta automática */
+async function drawRouteAuto() {
+  if (!userPos) { console.warn('sin userPos'); return; }
+  if (stops.length === 0) return;
+  sortStopsByProximity();
+  const coords = [userPos, ...stops.map(s => [s.lat, s.lng])];
+  await drawRouteOrdered(coords);
+}
+
+/* Invertir orden */
+async function invertOrder() {
+  stops.reverse();
+  refreshStopsUI();
+  if (userPos) await drawRouteOrdered([userPos, ...stops.map(s => [s.lat, s.lng])]);
+}
+
+/* Limpiar todo */
+function clearAll() {
+  stops = [];
+  markers.forEach(m => map.removeLayer(m));
+  markers = [];
+  if (routeLayer) map.removeLayer(routeLayer);
+  routeLayer = null;
+  document.getElementById('stops').innerHTML = '';
+  document.getElementById('info-route').innerHTML = '';
+}
+
+/* Eventos UI */
+document.getElementById('btn-loc').onclick = useMyLocation;
+document.getElementById('btn-add').onclick = () => addStopFromAddress(document.getElementById('addr').value.trim());
+document.getElementById('btn-invert').onclick = invertOrder;
+document.getElementById('btn-clear').onclick = clearAll;
+document.getElementById('btn-opt').onclick = drawRouteAuto;
+document.getElementById('addr').addEventListener('keypress', e => { if (e.key === 'Enter') addStopFromAddress(e.target.value.trim()); });
+</script>
 </body>
 </html>
