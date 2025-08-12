@@ -1,177 +1,129 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Reparto Chuli - Operativa</title>
-
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-
-<style>
-  body,html{height:100%;margin:0;font-family:Arial,Helvetica,sans-serif}
-  #map{height:68%}
-  .controls{padding:10px;background:#f7f7f7;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-  input,button{padding:8px;font-size:14px}
-  #stops{max-height:22vh;overflow:auto;padding:8px;background:#fff;border-top:1px solid #eee}
-  .stop-item{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0}
-  .num-badge { background:#1976d2;color:white;border-radius:50%;width:26px;height:26px;display:inline-flex;align-items:center;justify-content:center;font-size:13px;margin-right:8px;}
-</style>
-</head>
-<body>
-
-<div id="map"></div>
-
-<div class="controls">
-  <button id="btn-loc">📍 Mi ubicación</button>
-  <input id="addr" placeholder="Agregar dirección (máx 9)" style="flex:1" />
-  <button id="btn-add">➕ Agregar</button>
-  <button id="btn-invert">🔁 Invertir orden</button>
-  <button id="btn-clear">🗑️ Limpiar</button>
-  <button id="btn-opt">⚡ Optimizar y trazar</button>
-</div>
-
-<div id="stops"></div>
-
-<script>
-/* --- TU API KEY insertada --- */
-const ORS_API_KEY = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjAyNjY4YmE3NTkyMzQ5OGJiNGRkYjA2OTI0YTM3MGQ1IiwiaCI6Im11cm11cjY0In0=";
-/* --------------------------- */
-
-const MAX_STOPS = 9;
-let map = L.map('map').setView([-38.0055,-57.5426], 13);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OSM'}).addTo(map);
-
-let userPos = null;          // [lat, lng]
-let stops = [];              // [{address, lat, lng}]
-let markers = [];            // leaflet markers
-let routeLayer = null;
-
-// Haversine (m)
-function haversine(a,b){
-  const R=6371000;
-  const toRad = x => x*Math.PI/180;
-  const dLat = toRad(b[0]-a[0]), dLon = toRad(b[1]-a[1]);
-  const lat1 = toRad(a[0]), lat2 = toRad(b[0]);
-  const h = Math.sin(dLat/2)**2 + Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLon/2)**2;
-  return 2*R*Math.asin(Math.sqrt(h));
-}
-
-function makeNumberIcon(n){
-  const html = `<div style="display:flex;align-items:center"><div class="num-badge">${n}</div></div>`;
-  return L.divIcon({html, className: '', iconSize:[30,30], iconAnchor:[15,15]});
-}
-
-function refreshStopsUI(){
-  markers.forEach(m=>map.removeLayer(m)); markers=[];
-  const list = document.getElementById('stops'); list.innerHTML='';
-  stops.forEach((s,i)=>{
-    const li = document.createElement('div'); li.className='stop-item';
-    const left = document.createElement('div');
-    left.innerHTML = `<span class="num-badge">${i+1}</span><strong>${s.address}</strong><br><small>${s.lat.toFixed(5)}, ${s.lng.toFixed(5)}</small>`;
-    const right = document.createElement('div');
-    const dist = userPos ? (haversine(userPos,[s.lat,s.lng])|0) : -1;
-    right.innerHTML = `<small>${userPos? (dist/1000).toFixed(2)+' km':''}</small>`;
-    li.appendChild(left); li.appendChild(right);
-    list.appendChild(li);
-    const m = L.marker([s.lat,s.lng], {icon: makeNumberIcon(i+1)}).addTo(map).bindPopup(`${i+1}. ${s.address}`);
-    markers.push(m);
-  });
+list.appendChild(li);
+const m = L.marker([s.lat, s.lng], { icon: makeNumberIcon(i + 1) }).addTo(map).bindPopup(`${i + 1}. ${s.address}`);
+markers.push(m);
+});
 }
 
 /* Geocodifica dirección -> agrega stop */
-async function addStopFromAddress(address){
-  if(!address){ alert('Ingresá una dirección'); return; }
-  if(stops.length >= MAX_STOPS){ alert('Máximo '+MAX_STOPS+' destinos'); return; }
-  try{
+async function addStopFromAddress(address) {
+  if (!address) {
+    alert('Ingresá una dirección');
+    return;
+  }
+  if (stops.length >= MAX_STOPS) {
+    alert('Máximo ' + MAX_STOPS + ' destinos');
+    return;
+  }
+
+  // Verificar si la dirección ya existe
+  if (stops.some(stop => stop.address.toLowerCase() === address.toLowerCase())) {
+    alert('Esta dirección ya ha sido agregada.');
+    return;
+  }
+
+  try {
     const url = `https://api.openrouteservice.org/geocode/search?api_key=${ORS_API_KEY}&text=${encodeURIComponent(address)}&size=1`;
     const r = await fetch(url);
     const j = await r.json();
-    if(!j.features || j.features.length===0) throw new Error('no encontrado');
-    const [lon,lat] = j.features[0].geometry.coordinates;
-    stops.push({address: address, lat: lat, lng: lon});
+
+    if (!j.features || j.features.length === 0) throw new Error('no encontrado');
+
+    const [lon, lat] = j.features[0].geometry.coordinates;
+
+    // Verificar si las coordenadas ya están en la lista de paradas
+    if (stops.some(stop => stop.lat === lat && stop.lng === lon)) {
+      alert('Esta ubicación ya ha sido agregada.');
+      return;
+    }
+
+    stops.push({ address: address, lat: lat, lng: lon });
     refreshStopsUI();
-    // si tenemos ubicación del usuario, ordenar automáticamente y trazar
-    if(userPos) {
+
+    // Si tenemos ubicación del usuario, ordenar automáticamente y trazar
+    if (userPos) {
       sortStopsByProximity();
       await drawRouteAuto();
     }
-  }catch(e){
+  } catch (e) {
     console.error(e);
     alert('Dirección no encontrada.');
   }
 }
 
 /* usar geolocalización */
-function useMyLocation(){
-  if(!navigator.geolocation){ alert('No hay geolocalización'); return; }
-  navigator.geolocation.getCurrentPosition(p=>{
+function useMyLocation() {
+  if (!navigator.geolocation) { alert('No hay geolocalización'); return; }
+  navigator.geolocation.getCurrentPosition(p => {
     userPos = [p.coords.latitude, p.coords.longitude];
-    const m = L.circleMarker(userPos,{radius:8, color:'#2e7d32', fill:true}).addTo(map).bindPopup('Tu ubicación').openPopup();
-    map.setView(userPos,14);
+    const m = L.circleMarker(userPos, { radius: 8, color: '#2e7d32', fill: true }).addTo(map).bindPopup('Tu ubicación').openPopup();
+    map.setView(userPos, 14);
     refreshStopsUI();
-  }, err=>{
-    alert('Error geolocalización: '+err.message);
-  }, {enableHighAccuracy:true, timeout:10000});
+  }, err => {
+    alert('Error geolocalización: ' + err.message);
+  }, { enableHighAccuracy: true, timeout: 10000 });
 }
 
 /* ordenar localmente por cercanía desde userPos */
-function sortStopsByProximity(){
-  if(!userPos) { alert('Activa ubicación primero (📍 Mi ubicación)'); return; }
-  stops.sort((a,b)=> haversine(userPos,[a.lat,a.lng]) - haversine(userPos,[b.lat,b.lng]));
+function sortStopsByProximity() {
+  if (!userPos) { alert('Activa ubicación primero (📍 Mi ubicación)'); return; }
+  stops.sort((a, b) => haversine(userPos, [a.lat, a.lng]) - haversine(userPos, [b.lat, b.lng]));
   refreshStopsUI();
 }
 
 /* traza ruta llamando ORS directions una vez (userPos -> stops...) */
-async function drawRouteOrdered(coordsLatLng){
-  if(coordsLatLng.length < 2) return;
+async function drawRouteOrdered(coordsLatLng) {
+  if (coordsLatLng.length < 2) return;
   const coordsLonLat = coordsLatLng.map(c => [c[1], c[0]]); // lon,lat
   const body = { coordinates: coordsLonLat };
-  try{
+  try {
     const res = await fetch('https://api.openrouteservice.org/v2/directions/driving-car/geojson', {
-      method:'POST',
-      headers:{ 'Authorization': ORS_API_KEY, 'Content-Type':'application/json' },
+      method: 'POST',
+      headers: { 'Authorization': ORS_API_KEY, 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     });
     const geo = await res.json();
-    if(routeLayer) map.removeLayer(routeLayer);
-    routeLayer = L.geoJSON(geo, { style:{color:'#1976d2', weight:4} }).addTo(map);
-    map.fitBounds(routeLayer.getBounds(), {padding:[40,40]});
-  }catch(e){
+    if (routeLayer) map.removeLayer(routeLayer);
+    routeLayer = L.geoJSON(geo, { style: { color: '#1976d2', weight: 4 } }).addTo(map);
+    map.fitBounds(routeLayer.getBounds(), { padding: [40, 40] });
+  } catch (e) {
     console.error(e);
     alert('Error trazando ruta.');
   }
 }
 
 /* ordena localmente y luego traza (flujo automático) */
-async function drawRouteAuto(){
-  if(!userPos) { console.warn('sin userPos'); return; }
-  if(stops.length === 0) return;
+async function drawRouteAuto() {
+  if (!userPos) { console.warn('sin userPos'); return; }
+  if (stops.length === 0) return;
   sortStopsByProximity();
-  const coords = [userPos, ...stops.map(s=>[s.lat,s.lng])];
+  const coords = [userPos, ...stops.map(s => [s.lat, s.lng])];
   await drawRouteOrdered(coords);
 }
 
 /* invertir manteniendo inicio = userPos */
-async function invertOrder(){
+async function invertOrder() {
   stops.reverse();
   refreshStopsUI();
-  if(userPos) await drawRouteOrdered([userPos, ...stops.map(s=>[s.lat,s.lng])]);
+  if (userPos) await drawRouteOrdered([userPos, ...stops.map(s => [s.lat, s.lng])]);
 }
 
 /* limpiar todo */
-function clearAll(){
-  stops = []; markers.forEach(m=>map.removeLayer(m)); markers=[]; if(routeLayer) map.removeLayer(routeLayer); routeLayer=null;
-  document.getElementById('stops').innerHTML='';
+function clearAll() {
+  stops = [];
+  markers.forEach(m => map.removeLayer(m));
+  markers = [];
+  if (routeLayer) map.removeLayer(routeLayer);
+  routeLayer = null;
+  document.getElementById('stops').innerHTML = '';
 }
 
 /* eventos UI */
 document.getElementById('btn-loc').onclick = useMyLocation;
-document.getElementById('btn-add').onclick = ()=> addStopFromAddress(document.getElementById('addr').value.trim());
+document.getElementById('btn-add').onclick = () => addStopFromAddress(document.getElementById('addr').value.trim());
 document.getElementById('btn-invert').onclick = invertOrder;
 document.getElementById('btn-clear').onclick = clearAll;
 document.getElementById('btn-opt').onclick = drawRouteAuto;
-document.getElementById('addr').addEventListener('keypress', e=>{ if(e.key==='Enter') addStopFromAddress(e.target.value.trim()); });
+document.getElementById('addr').addEventListener('keypress', e => { if (e.key === 'Enter') addStopFromAddress(e.target.value.trim()); });
 
 </script>
 </body>
